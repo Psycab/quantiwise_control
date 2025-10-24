@@ -147,31 +147,38 @@ class DeepSearchForeignBuyingTop20IndexSystem:
             for i, stock_code in enumerate(stock_codes):
                 col = i + 2
                 values = []
+                valid_indices = []  # 유효한 데이터의 인덱스 저장
                 
                 for row in range(start_row, end_row + 1):
                     try:
                         cell_value = worksheet.cell(row=row, column=col).value
                         if cell_value is not None:
                             if data_type == "foreign":
-                                value = float(cell_value) * 10000  # 외국인 순매수는 10000 곱하기
+                                value = float(cell_value) * 100000000  # 외국인 순매수는 10000 곱하기
                             else:
                                 value = float(cell_value)
                             values.append(value)
-                        else:
-                            values.append(0)
+                            valid_indices.append(row - start_row)  # 0부터 시작하는 인덱스
+                        # 빈 셀은 제외 (0을 추가하지 않음)
                     except:
-                        values.append(0)
+                        # 변환 실패한 경우도 제외
+                        pass
                 
                 if values:
-                    # 날짜와 값의 개수를 맞춤
-                    valid_dates = dates[:len(values)] if len(dates) >= len(values) else []
+                    # 날짜와 값의 개수를 맞춤 (유효한 데이터만)
+                    valid_dates = []
+                    for idx in valid_indices:
+                        if idx < len(dates):
+                            valid_dates.append(dates[idx])
+                    
                     data[stock_code] = {
                         'name': stock_names.get(stock_code, f"종목_{stock_code}"),
                         'values': np.array(values),
-                        'dates': valid_dates
+                        'dates': valid_dates,
+                        'valid_indices': valid_indices  # 유효한 데이터의 인덱스 정보 추가
                     }
             
-            print(f"{data_type} 데이터 추출 완료: {len(data)}개 종목")
+            print(f"{data_type} 데이터 추출 완료: {len(data)}개 종목 (전체 {len(stock_codes)}개 중)")
             
             # 데이터 날짜 범위 출력
             if dates:
@@ -184,11 +191,11 @@ class DeepSearchForeignBuyingTop20IndexSystem:
             else:
                 print(f"  [경고] {data_type} 데이터: 날짜 정보 없음")
             
-            return data
+            return data, len(stock_codes)  # 데이터와 전체 종목 수 반환
             
         except Exception as e:
             print(f"[오류] {data_type} 데이터 파싱 실패: {e}")
-            return None
+            return None, 0
     
     def apply_eps_filter(self, eps_data):
         """EPS 필터 적용: (1개월 평균 - 3개월 평균) / abs(3개월 평균)"""
@@ -198,12 +205,12 @@ class DeepSearchForeignBuyingTop20IndexSystem:
             eps_scores = {}
             
             for stock_code, data in eps_data.items():
-                eps_values = data['values']
+                eps_values = data.get('values', np.array([]))
                 dates = data.get('dates', [])
                 
                 if len(eps_values) < 30:
                     eps_scores[stock_code] = {
-                        'name': data['name'],
+                        'name': data.get('name', f"종목_{stock_code}"),
                         'eps_score': 0,
                         'status': '데이터부족'
                     }
@@ -254,6 +261,7 @@ class DeepSearchForeignBuyingTop20IndexSystem:
                         if date >= three_month_start:
                             three_month_values.append(eps_values[i])
                     
+                    # 빈 셀은 이미 제외된 상태이므로 실제 데이터만으로 평균 계산
                     one_month_avg = np.mean(one_month_values) if one_month_values else 0
                     three_month_avg = np.mean(three_month_values) if three_month_values else 0
                     
@@ -279,7 +287,7 @@ class DeepSearchForeignBuyingTop20IndexSystem:
                     eps_score = 0
                 
                 eps_scores[stock_code] = {
-                    'name': data['name'],
+                    'name': data.get('name', f"종목_{stock_code}"),
                     'eps_score': eps_score,
                     'one_month_avg': one_month_avg,
                     'three_month_avg': three_month_avg,
@@ -312,20 +320,20 @@ class DeepSearchForeignBuyingTop20IndexSystem:
             for stock_code, eps_data in eps_filtered_stocks.items():
                 if stock_code not in foreign_data or stock_code not in market_cap_data:
                     intensity_scores[stock_code] = {
-                        'name': eps_data['name'],
+                        'name': eps_data.get('name', f"종목_{stock_code}"),
                         'intensity_score': 0,
                         'status': '데이터부족'
                     }
                     continue
                 
-                foreign_values = foreign_data[stock_code]['values']
-                cap_values = market_cap_data[stock_code]['values']
+                foreign_values = foreign_data[stock_code].get('values', np.array([]))
+                cap_values = market_cap_data[stock_code].get('values', np.array([]))
                 foreign_dates = foreign_data[stock_code].get('dates', [])
                 cap_dates = market_cap_data[stock_code].get('dates', [])
                 
                 if len(foreign_values) < 30 or len(cap_values) < 30:
                     intensity_scores[stock_code] = {
-                        'name': eps_data['name'],
+                        'name': eps_data.get('name', f"종목_{stock_code}"),
                         'intensity_score': 0,
                         'status': '데이터부족'
                     }
@@ -369,6 +377,7 @@ class DeepSearchForeignBuyingTop20IndexSystem:
                             if i < len(cap_values):
                                 cap_6month_values.append(cap_values[i])
                     
+                    # 빈 셀은 이미 제외된 상태이므로 실제 데이터만으로 평균 계산
                     foreign_avg = np.mean(foreign_6month_values) if foreign_6month_values else 0
                     cap_avg = np.mean(cap_6month_values) if cap_6month_values else 0
                     
@@ -393,11 +402,11 @@ class DeepSearchForeignBuyingTop20IndexSystem:
                     intensity_score = 0
                 
                 intensity_scores[stock_code] = {
-                    'name': eps_data['name'],
+                    'name': eps_data.get('name', f"종목_{stock_code}"),
                     'intensity_score': intensity_score,
                     'foreign_avg': foreign_avg,
                     'cap_avg': cap_avg,
-                    'eps_score': eps_data['eps_score'],
+                    'eps_score': eps_data.get('eps_score', 0),
                     'status': '계산완료'
                 }
             
@@ -428,8 +437,8 @@ class DeepSearchForeignBuyingTop20IndexSystem:
                 if stock_code not in foreign_data or stock_code not in market_cap_data:
                     continue
                 
-                foreign_values = foreign_data[stock_code]['values']
-                cap_values = market_cap_data[stock_code]['values']
+                foreign_values = foreign_data[stock_code].get('values', np.array([]))
+                cap_values = market_cap_data[stock_code].get('values', np.array([]))
                 foreign_dates = foreign_data[stock_code].get('dates', [])
                 cap_dates = market_cap_data[stock_code].get('dates', [])
                 
@@ -484,6 +493,7 @@ class DeepSearchForeignBuyingTop20IndexSystem:
                             if i < len(cap_values):
                                 two_month_cap_values.append(cap_values[i])
                     
+                    # 빈 셀은 이미 제외된 상태이므로 실제 데이터만으로 평균 계산
                     one_month_foreign = np.mean(one_month_foreign_values) if one_month_foreign_values else 0
                     one_month_cap = np.mean(one_month_cap_values) if one_month_cap_values else 0
                     two_month_foreign = np.mean(two_month_foreign_values) if two_month_foreign_values else 0
@@ -519,17 +529,21 @@ class DeepSearchForeignBuyingTop20IndexSystem:
                     two_month_score = 0
                 
                 one_month_scores[stock_code] = {
-                    'name': data['name'],
+                    'name': data.get('name', f"종목_{stock_code}"),
                     'one_month_score': one_month_score,
-                    'eps_score': data['eps_score'],
-                    'intensity_score': data['intensity_score']
+                    'one_month_foreign': one_month_foreign,
+                    'one_month_cap': one_month_cap,
+                    'eps_score': data.get('eps_score', 0),
+                    'intensity_score': data.get('intensity_score', 0)
                 }
                 
                 two_month_scores[stock_code] = {
-                    'name': data['name'],
+                    'name': data.get('name', f"종목_{stock_code}"),
                     'two_month_score': two_month_score,
-                    'eps_score': data['eps_score'],
-                    'intensity_score': data['intensity_score']
+                    'two_month_foreign': two_month_foreign,
+                    'two_month_cap': two_month_cap,
+                    'eps_score': data.get('eps_score', 0),
+                    'intensity_score': data.get('intensity_score', 0)
                 }
             
             # 1개월 상위 10개 선정
@@ -586,11 +600,18 @@ class DeepSearchForeignBuyingTop20IndexSystem:
             for stock_code, count in stock_selection_count.items():
                 # 종목 정보 수집
                 stock_name = None
+                one_month_score = 0
+                two_month_score = 0
+                eps_score = 0
+                intensity_score = 0
                 
                 # 1개월 정보
                 if stock_code in self.one_month_top_10:
                     stock_name = self.one_month_top_10[stock_code].get('name')
                     one_month_rank = list(self.one_month_top_10.keys()).index(stock_code) + 1
+                    one_month_score = self.one_month_top_10[stock_code].get('one_month_score', 0)
+                    eps_score = self.one_month_top_10[stock_code].get('eps_score', 0)
+                    intensity_score = self.one_month_top_10[stock_code].get('intensity_score', 0)
                 else:
                     one_month_rank = None
                 
@@ -599,6 +620,12 @@ class DeepSearchForeignBuyingTop20IndexSystem:
                     if not stock_name:
                         stock_name = self.two_month_top_10[stock_code].get('name')
                     two_month_rank = list(self.two_month_top_10.keys()).index(stock_code) + 1
+                    two_month_score = self.two_month_top_10[stock_code].get('two_month_score', 0)
+                    # 1개월에서 가져오지 못한 점수 정보가 있다면 2개월에서 가져오기
+                    if eps_score == 0:
+                        eps_score = self.two_month_top_10[stock_code].get('eps_score', 0)
+                    if intensity_score == 0:
+                        intensity_score = self.two_month_top_10[stock_code].get('intensity_score', 0)
                 else:
                     two_month_rank = None
                 
@@ -610,7 +637,11 @@ class DeepSearchForeignBuyingTop20IndexSystem:
                     'selection_count': count,
                     'final_weight': final_weight,
                     'one_month_rank': one_month_rank,
-                    'two_month_rank': two_month_rank
+                    'two_month_rank': two_month_rank,
+                    'one_month_score': one_month_score,
+                    'two_month_score': two_month_score,
+                    'eps_score': eps_score,
+                    'intensity_score': intensity_score
                 }
             
             # 최종 비중 순으로 정렬
@@ -647,12 +678,12 @@ class DeepSearchForeignBuyingTop20IndexSystem:
             for rank, (stock_code, data) in enumerate(final_stocks.items(), 1):
                 final_ws.cell(row=row, column=1, value=rank)
                 final_ws.cell(row=row, column=2, value=stock_code)
-                final_ws.cell(row=row, column=3, value=data['name'])
-                final_ws.cell(row=row, column=4, value=round(data['eps_score'], 4))
-                final_ws.cell(row=row, column=5, value=round(data['intensity_score'], 6))
-                final_ws.cell(row=row, column=6, value=round(data['foreign_avg'], 2))
-                final_ws.cell(row=row, column=7, value=round(data['cap_avg'], 2))
-                final_ws.cell(row=row, column=8, value=data['status'])
+                final_ws.cell(row=row, column=3, value=data.get('name', f"종목_{stock_code}"))
+                final_ws.cell(row=row, column=4, value=round(data.get('eps_score', 0), 4))
+                final_ws.cell(row=row, column=5, value=round(data.get('intensity_score', 0), 6))
+                final_ws.cell(row=row, column=6, value=round(data.get('foreign_avg', 0), 2))
+                final_ws.cell(row=row, column=7, value=round(data.get('cap_avg', 0), 2))
+                final_ws.cell(row=row, column=8, value=data.get('status', '알수없음'))
                 row += 1
             
             # 2. EPS 필터 전체 결과 시트
@@ -666,12 +697,12 @@ class DeepSearchForeignBuyingTop20IndexSystem:
             for rank, (stock_code, data) in enumerate(sorted_eps, 1):
                 eps_ws.cell(row=row, column=1, value=rank)
                 eps_ws.cell(row=row, column=2, value=stock_code)
-                eps_ws.cell(row=row, column=3, value=data['name'])
-                eps_ws.cell(row=row, column=4, value=round(data['eps_score'], 4))
-                eps_ws.cell(row=row, column=5, value=round(data['one_month_avg'], 2))
-                eps_ws.cell(row=row, column=6, value=round(data['three_month_avg'], 2))
+                eps_ws.cell(row=row, column=3, value=data.get('name', f"종목_{stock_code}"))
+                eps_ws.cell(row=row, column=4, value=round(data.get('eps_score', 0), 4))
+                eps_ws.cell(row=row, column=5, value=round(data.get('one_month_avg', 0), 2))
+                eps_ws.cell(row=row, column=6, value=round(data.get('three_month_avg', 0), 2))
                 eps_ws.cell(row=row, column=7, value=data.get('data_count', 0))
-                eps_ws.cell(row=row, column=8, value=data['status'])
+                eps_ws.cell(row=row, column=8, value=data.get('status', '알수없음'))
                 eps_ws.cell(row=row, column=9, value="통과" if stock_code in self.eps_top_100 else "미통과")
                 row += 1
             
@@ -686,12 +717,12 @@ class DeepSearchForeignBuyingTop20IndexSystem:
             for rank, (stock_code, data) in enumerate(sorted_intensity, 1):
                 intensity_ws.cell(row=row, column=1, value=rank)
                 intensity_ws.cell(row=row, column=2, value=stock_code)
-                intensity_ws.cell(row=row, column=3, value=data['name'])
-                intensity_ws.cell(row=row, column=4, value=round(data['intensity_score'], 6))
-                intensity_ws.cell(row=row, column=5, value=round(data['foreign_avg'], 2))
-                intensity_ws.cell(row=row, column=6, value=round(data['cap_avg'], 2))
-                intensity_ws.cell(row=row, column=7, value=round(data['eps_score'], 4))
-                intensity_ws.cell(row=row, column=8, value=data['status'])
+                intensity_ws.cell(row=row, column=3, value=data.get('name', f"종목_{stock_code}"))
+                intensity_ws.cell(row=row, column=4, value=round(data.get('intensity_score', 0), 6))
+                intensity_ws.cell(row=row, column=5, value=round(data.get('foreign_avg', 0), 2))
+                intensity_ws.cell(row=row, column=6, value=round(data.get('cap_avg', 0), 2))
+                intensity_ws.cell(row=row, column=7, value=round(data.get('eps_score', 0), 4))
+                intensity_ws.cell(row=row, column=8, value=data.get('status', '알수없음'))
                 intensity_ws.cell(row=row, column=9, value="통과" if stock_code in self.final_top_50 else "미통과")
                 row += 1
             
@@ -705,12 +736,12 @@ class DeepSearchForeignBuyingTop20IndexSystem:
             for rank, (stock_code, data) in enumerate(self.one_month_top_10.items(), 1):
                 one_month_ws.cell(row=row, column=1, value=rank)
                 one_month_ws.cell(row=row, column=2, value=stock_code)
-                one_month_ws.cell(row=row, column=3, value=data['name'])
-                one_month_ws.cell(row=row, column=4, value=round(data['one_month_score'], 6))
+                one_month_ws.cell(row=row, column=3, value=data.get('name', f"종목_{stock_code}"))
+                one_month_ws.cell(row=row, column=4, value=round(data.get('one_month_score', 0), 6))
                 one_month_ws.cell(row=row, column=5, value=round(data.get('one_month_foreign', 0), 2))
                 one_month_ws.cell(row=row, column=6, value=round(data.get('one_month_cap', 0), 2))
-                one_month_ws.cell(row=row, column=7, value=round(data['eps_score'], 4))
-                one_month_ws.cell(row=row, column=8, value=round(data['intensity_score'], 6))
+                one_month_ws.cell(row=row, column=7, value=round(data.get('eps_score', 0), 4))
+                one_month_ws.cell(row=row, column=8, value=round(data.get('intensity_score', 0), 6))
                 row += 1
             
             # 5. 2개월 외국인 수급 상위 10종목 시트
@@ -723,12 +754,12 @@ class DeepSearchForeignBuyingTop20IndexSystem:
             for rank, (stock_code, data) in enumerate(self.two_month_top_10.items(), 1):
                 two_month_ws.cell(row=row, column=1, value=rank)
                 two_month_ws.cell(row=row, column=2, value=stock_code)
-                two_month_ws.cell(row=row, column=3, value=data['name'])
-                two_month_ws.cell(row=row, column=4, value=round(data['two_month_score'], 6))
+                two_month_ws.cell(row=row, column=3, value=data.get('name', f"종목_{stock_code}"))
+                two_month_ws.cell(row=row, column=4, value=round(data.get('two_month_score', 0), 6))
                 two_month_ws.cell(row=row, column=5, value=round(data.get('two_month_foreign', 0), 2))
                 two_month_ws.cell(row=row, column=6, value=round(data.get('two_month_cap', 0), 2))
-                two_month_ws.cell(row=row, column=7, value=round(data['eps_score'], 4))
-                two_month_ws.cell(row=row, column=8, value=round(data['intensity_score'], 6))
+                two_month_ws.cell(row=row, column=7, value=round(data.get('eps_score', 0), 4))
+                two_month_ws.cell(row=row, column=8, value=round(data.get('intensity_score', 0), 6))
                 row += 1
             
             # 6. 최종 비중 시트
@@ -741,9 +772,9 @@ class DeepSearchForeignBuyingTop20IndexSystem:
             for rank, (stock_code, data) in enumerate(self.final_weights.items(), 1):
                 final_weight_ws.cell(row=row, column=1, value=rank)
                 final_weight_ws.cell(row=row, column=2, value=stock_code)
-                final_weight_ws.cell(row=row, column=3, value=data['name'])
-                final_weight_ws.cell(row=row, column=4, value=data['selection_count'])
-                final_weight_ws.cell(row=row, column=5, value=round(data['final_weight'], 4))
+                final_weight_ws.cell(row=row, column=3, value=data.get('name', f"종목_{stock_code}"))
+                final_weight_ws.cell(row=row, column=4, value=data.get('selection_count', 0))
+                final_weight_ws.cell(row=row, column=5, value=round(data.get('final_weight', 0), 4))
                 final_weight_ws.cell(row=row, column=6, value=data.get('one_month_rank', "-"))
                 final_weight_ws.cell(row=row, column=7, value=data.get('two_month_rank', "-"))
                 final_weight_ws.cell(row=row, column=8, value=round(data.get('one_month_score', 0), 6))
@@ -757,7 +788,7 @@ class DeepSearchForeignBuyingTop20IndexSystem:
             summary_ws.cell(row=1, column=1, value="구분")
             summary_ws.cell(row=1, column=2, value="개수")
             summary_ws.cell(row=2, column=1, value="전체 종목 수")
-            summary_ws.cell(row=2, column=2, value=len(self.eps_scores))
+            summary_ws.cell(row=2, column=2, value=getattr(self, 'total_stock_count', len(self.eps_scores)))
             summary_ws.cell(row=3, column=1, value="EPS 필터 통과 종목 수")
             summary_ws.cell(row=3, column=2, value=len(self.eps_top_100))
             summary_ws.cell(row=4, column=1, value="최종 선정 종목 수")
@@ -801,9 +832,12 @@ class DeepSearchForeignBuyingTop20IndexSystem:
             return False
         
         # 2. 전체 종목 데이터 파싱
-        eps_data = self.parse_data(sheets.get('eps_sheet', ''), "eps")
-        foreign_data = self.parse_data(sheets.get('foreign_sheet', ''), "foreign")
-        market_cap_data = self.parse_data(sheets.get('market_cap_sheet', ''), "market_cap")
+        eps_data, total_stock_count = self.parse_data(sheets.get('eps_sheet', ''), "eps")
+        foreign_data, _ = self.parse_data(sheets.get('foreign_sheet', ''), "foreign")
+        market_cap_data, _ = self.parse_data(sheets.get('market_cap_sheet', ''), "market_cap")
+        
+        # 전체 종목 수 저장 (원본 엑셀에서 추출한 종목코드 수)
+        self.total_stock_count = total_stock_count
         
         if not eps_data or not foreign_data or not market_cap_data:
             print("필요한 데이터가 부족합니다.")
@@ -840,7 +874,7 @@ class DeepSearchForeignBuyingTop20IndexSystem:
         print("=" * 80)
         print("DeepSearch 외인수급Top20 지수 (PR) 구성종목 선정 시스템 완료!")
         print("영문명: DeepSearch Net Foreign BuyingTop20 Index PR")
-        print(f"- 전체 종목 수: {len(self.eps_scores)}")
+        print(f"- 전체 종목 수: {getattr(self, 'total_stock_count', len(self.eps_scores))}")
         print(f"- EPS 필터 통과 종목 수: {len(self.eps_top_100)}")
         print(f"- 최종 선정 종목 수: {len(self.final_top_50)}")
         print(f"- 1개월 외국인 수급 상위 종목 수: {len(self.one_month_top_10)}")
@@ -1253,6 +1287,7 @@ def main():
             
             print(f"기존 파일 발견: {target_filename}")
             new_filename = target_filename
+            existing_filename = target_filename  # 기존 파일 사용 모드에서는 같은 파일
         
         # 4. Excel 파일 내 날짜 업데이트 (새 파일 생성 모드에서만)
         if create_new_file:
@@ -1288,8 +1323,8 @@ def main():
         print("=" * 80)
         
     except Exception as e:
-        # 에러 발생 시 새로 생성된 파일 삭제
-        if new_filename:
+        # 에러 발생 시 새로 생성된 파일만 삭제 (기존 파일 사용 모드에서는 삭제하지 않음)
+        if new_filename and create_new_file:  # 새 파일 생성 모드에서만 삭제
             try:
                 new_file_path = os.path.join(scheduler.base_directory, new_filename)
                 if os.path.exists(new_file_path):
